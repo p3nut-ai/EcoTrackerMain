@@ -94,6 +94,7 @@ const forexFactoryScraper = async (page) => {
             title.includes("Federal Reserve") ||
             title.includes("US") ||
             title.includes("USD") ||
+            title.includes("China") ||
             title.includes("interest rate") ||
             title.includes("monetary policy") ||
             title.includes("US economy") ||
@@ -133,37 +134,36 @@ async function scrapeUserTweets(page, keywords) {
   const searchUrl = 'https://x.com/DBNewswire';
   await page.goto(searchUrl, { waitUntil: 'networkidle2' });
   await page.waitForSelector('article', { timeout: 30000 });
-  console.log("tweet display");
-  
-  const dynamicDate = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  // const dynamicDate = "Feb 22";
-  
+
+
+  const dynamicDate = new Date().toISOString().split('T')[0]; // Format pang match sa format ng Twitter
+
+
+  // this code block doesnt work
   const tweets = await page.evaluate((dynamicDate, keywords) => {
-    try {
-      const tweetNodes = document.querySelectorAll('article');
-      const tweetData = [];
-      console.log("Entering evaluate...");
-  
-      tweetNodes.forEach(node => {  
-        const timeElement = node.querySelector('time');
-        const tweetTextElement = node.querySelector('div[data-testid="tweetText"] span');
-        console.log("Checking tweet:", tweetTextElement);
-  
-        if (timeElement && tweetTextElement) {
-          const tweetDate = timeElement.textContent.trim();
-          const tweetText = tweetTextElement.innerText;
-          if (tweetDate === dynamicDate && keywords.some(keyword => tweetText.includes(keyword))) {
-            tweetData.push(tweetText);
-          }
-        }
-      });
+    const tweetNodes = document.querySelectorAll('article');
+    const tweetData = [];
+    // console.log('Number of article elements found:', tweetNodes.length);
+    tweetNodes.forEach(node => {  
+      const timeElement = node.querySelector('time');
+      const tweetTextElement = node.querySelector('div[data-testid="tweetText"]');
       
-      return tweetData;
-    } catch (error) {
-      return { error: error.toString() };
-    }
+      if (timeElement && tweetTextElement) {
+        const tweetDate = timeElement.getAttribute('datetime')?.split('T')[0]; // Use ISO date
+        const tweetText = tweetTextElement.textContent;
+        
+        // Compare dates and keywords
+        if (tweetDate.includes(dynamicDate) && keywords.some(k => tweetText.includes(k))) {
+          tweetData.push(tweetText);
+        }
+      }
+      else{
+        console.log("Error can't locate tweet");
+      }
+    });
+    
+    return tweetData;
   }, dynamicDate, keywords);
-  
   if (tweets.error) {
     console.error("Error from evaluate:", tweets.error);
   }
@@ -214,7 +214,7 @@ function startAutoRefreshWithScrape(page, pageName, scraperFunction, ...scraperA
   await twitterPage.goto('https://x.com/login', { waitUntil: 'networkidle2' });
   await twitterPage.waitForSelector('article', { timeout: 0 });
   
-  const keywords = ["dollar", "Federal Reserve", "interest rate", "monetary policy", "US economy", "S&P"];
+  const keywords = ["dollar", "Federal Reserve", "interest rate", "monetary policy", "US economy", "S&P", "USD", "US"];
   
   const initialForexNews = await forexFactoryScraper(forexPage);
   console.log('Initial Forex Factory News:', initialForexNews);

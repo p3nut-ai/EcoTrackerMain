@@ -72,28 +72,25 @@ async def receive_twitter_data(payload: List[str]):
             main_temp_database.append({"type": "twitter", "content": item})
         else:
             pass
-            # print("Duplicate Twitter data ignored:", item)
-            
     return {"message": "Twitter data received successfully", "count": len(payload)}
 
 
 @app.post("/api/forex")
 async def receive_forex_data(payload: ForexPayload):
     for item in payload.data:
-        # print(f"Received Forex data: {item.title}")
         # Check for duplicates based on the title (or any unique property)
         if not any(existing["title"] == item.title for existing in forex_temp):
             forex_temp.append(item.dict())
             main_temp_database.append({"type": "forex", "content": item.dict()})
-
         else:
             pass
-            # print("Duplicate Forex data ignored:", item.title)
     return {"message": "Forex data received successfully", "count": len(payload.data)}
 
 # endpoint para sa extension (Ai)
 @app.get("/api/get/deep_seek_data")
 async def get_prediction():
+    if main_temp_database == None:
+        return {"Database is emplty"}
     news_display = "Current Market Inputs:\n\n"
     for item in main_temp_database:
         if item['type'] == 'forex':
@@ -117,14 +114,14 @@ async def get_prediction():
 
     Answer format:
                 Bias: Direction don't include the word USD just the bias bullish or bearish
-                Duration: Validity Duration
+                Duration:Validity Duration display only the days if the bias is 1-6 hours valid use "1 Day" as an answer. indicate the date of the day of validity also for easy understanding.
                 Why: 1-2 sentences
                 News that acts as driving force: indicate news that acts as driving force for the bias 
                 
                 """
             }
         ],
-        temperature=0.4,  # Keep analytical
+        temperature=1.0,  # Keep analytical
     ) 
 
     response_deep_seek = response.choices[0].message.content
