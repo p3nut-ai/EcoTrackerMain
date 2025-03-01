@@ -212,6 +212,7 @@ function startAutoRefreshWithScrape(page, pageName, scraperFunction, ...scraperA
   
   // Go to Twitter login page, wait for articles to load
   await twitterPage.goto('https://x.com/login', { waitUntil: 'networkidle2' });
+  
   await twitterPage.waitForSelector('article', { timeout: 0 });
   
   const keywords = ["dollar", "Federal Reserve", "interest rate", "monetary policy", "US economy", "S&P", "USD", "US"];
