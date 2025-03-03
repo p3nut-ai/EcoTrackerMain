@@ -52,10 +52,10 @@ class ForexPayload(BaseModel):
     data: List[ForexItem]
 
 # Global in-memory temporary databases
-twitter_temp: List[str] = []          # List of Twitter strings
-forex_temp: List[dict] = []             # List of Forex items (as dicts)
-main_temp_database: List[dict] = []     # Aggregated news items
-processed_dates: set = set()           # Set of dates that have been processed
+twitter_temp: List[str] = []          
+forex_temp: List[dict] = []            
+main_temp_database: List[dict] = []    
+processed_dates: set = set()          
 
 def parse_time_value(time_str: str) -> float:
     """
