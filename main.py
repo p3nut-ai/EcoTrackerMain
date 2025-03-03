@@ -5,7 +5,7 @@ from datetime import date, timedelta, datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Tuple
+from typing import List
 
 # For AI (using OpenAI's client with a custom base_url)
 from openai import OpenAI
@@ -52,14 +52,14 @@ class ForexPayload(BaseModel):
     data: List[ForexItem]
 
 # Global in-memory temporary databases
-twitter_temp: List[str] = []          
-forex_temp: List[dict] = []            
-main_temp_database: List[dict] = []    
-processed_dates: set = set()          
+twitter_temp: List[str] = []          # List of Twitter strings
+forex_temp: List[dict] = []             # List of Forex items (as dicts)
+main_temp_database: List[dict] = []     # Aggregated news items
+processed_dates: set = set()           # Set of dates that have been processed
 
 def parse_time_value(time_str: str) -> float:
     """
-    Parse a time string such as "47 hr ago", "2 days ago", or "30 min ago"
+    Parse a time string (e.g., "47 hr ago", "2 days ago", "30 min ago")
     and return the value in hours.
     """
     parts = time_str.split()
@@ -79,24 +79,19 @@ def parse_time_value(time_str: str) -> float:
     else:
         return 0
 
-def validate_news_against_prediction(predicted_duration: str) -> Tuple[bool, str]:
+def compute_final_expiration_date(predicted_duration: str) -> str:
     """
-    Given a predicted duration string (e.g. "2 Days"), check all forex news items in the
-    main_temp_database and determine if any exceed the allowed age.
-    
-    Returns a tuple (is_valid, expiration_date_str). If is_valid is True,
-    expiration_date_str is computed as today's date minus predicted_duration (in days)
-    in MM/DD/YYYY format.
-    
-    If the maximum forex news age (rounded up to days) is greater than the predicted duration,
-    the prediction is considered invalid.
+    Compute the final expiration date using the following steps:
+      1. Determine the starting point date:
+         - Scan all forex news items in main_temp_database.
+         - Convert each forex news item's time (e.g., "47 hr ago") into hours,
+           determine the maximum, convert to days (round up), and subtract that many days from today.
+      2. Extract the AI-predicted validity duration (e.g., "2 Days") as a number.
+      3. Add the AI-predicted days to the starting point date.
+      4. If the final expiration date equals today's date, return "expired",
+         otherwise return the date formatted as MM/DD/YYYY.
     """
-    try:
-        predicted_days = int(predicted_duration.split()[0])
-    except Exception as e:
-        print("Error parsing predicted duration:", e)
-        predicted_days = 1
-
+    # Step 1: Calculate maximum forex news age in hours.
     forex_hours = []
     for item in main_temp_database:
         if item.get("type") == "forex":
@@ -106,74 +101,86 @@ def validate_news_against_prediction(predicted_duration: str) -> Tuple[bool, str
                 if hrs:
                     forex_hours.append(hrs)
     if forex_hours:
-        max_news_hours = max(forex_hours)
-        max_news_days = int(math.ceil(max_news_hours / 24))
+        max_hours = max(forex_hours)
+        forex_days = int(math.ceil(max_hours / 24))
     else:
-        max_news_days = 0  # No forex news available; treat as valid
+        forex_days = 0
 
-    print(f"Predicted validity: {predicted_days} days; Max forex news age: {max_news_days} days")
-    if max_news_days > predicted_days:
-        return (False, None)
+    starting_point = date.today() - timedelta(days=forex_days)
+
+    # Step 2: Extract predicted validity (in days) from the AI response.
+    try:
+        predicted_days = int(predicted_duration.split()[0])
+    except Exception as e:
+        print("Error parsing predicted duration:", e)
+        predicted_days = 1
+
+    # Step 3: Compute final expiration date.
+    final_expiration = starting_point + timedelta(days=predicted_days)
+
+    # Step 4: If final expiration equals today, mark as expired.
+    if final_expiration == date.today():
+        return "expired"
     else:
-        expiration_date = date.today() - timedelta(days=predicted_days)
-        return (True, expiration_date.strftime("%m/%d/%Y"))
+        return final_expiration.strftime("%m/%d/%Y")
+
+def clean_news_table() -> None:
+    """
+    Delete all news items from the 'news' table that do not have today's date.
+    """
+    current_date = date.today().isoformat()
+    print("Cleaning news table: deleting all news not from", current_date)
+    supabase.table("news").delete().neq("date", current_date).execute()
 
 def delete_expired_predictions() -> None:
     """
-    Check all AI predictions in Supabase and delete those whose expiration date (stored in the "duration" field)
-    has passed. The "duration" field holds an expiration date string in MM/DD/YYYY format.
+    Check all AI predictions in Supabase and delete those whose expiration date has passed
+    (or are marked as "expired"). If at least one prediction is deleted, clean the news table.
     """
     today = date.today()
     print("Running delete_expired_predictions job for date:", today.strftime("%m/%d/%Y"))
     
     response = supabase.table("ai_predictions").select("*").execute()
+    expired_found = False
+
     if not response.data:
         print("No predictions found in the table.")
-        return
+    else:
+        for prediction in response.data:
+            expiration_date_str = prediction.get("duration")
+            if not expiration_date_str:
+                print("Skipping prediction due to missing expiration date:", prediction)
+                continue
 
-    for prediction in response.data:
-        expiration_date_str = prediction.get("duration")
-        if not expiration_date_str:
-            print("Skipping prediction due to missing expiration date:", prediction)
-            continue
+            # If the stored duration is "expired", delete immediately.
+            if expiration_date_str.lower() == "expired":
+                supabase.table("ai_predictions").delete().eq("date", prediction.get("date")).execute()
+                processed_dates.add(prediction.get("date"))
+                expired_found = True
+                print("Deleted expired prediction for date", prediction.get("date"))
+                continue
 
-        # Determine if the duration field is a formatted date or a relative duration.
-        if "/" in expiration_date_str:
             try:
                 expiration_date = datetime.strptime(expiration_date_str, "%m/%d/%Y").date()
             except Exception as e:
                 print("Invalid expiration date format:", expiration_date_str, "Error:", e)
                 continue
-        elif "day" in expiration_date_str.lower():
-            # Expecting a string like "2 Days" or "1 Day"
-            try:
-                days = int(expiration_date_str.split()[0])
-            except Exception as e:
-                print("Unable to parse days from:", expiration_date_str, "Error:", e)
-                continue
-            # Use the creation date (stored in prediction["date"]) to compute expiration.
-            try:
-                creation_date = date.fromisoformat(prediction.get("date"))
-            except Exception as e:
-                print("Invalid creation date format in prediction:", prediction.get("date"), "Error:", e)
-                continue
-            # Adjust so that the creation day counts as Day 1.
-            expiration_date = creation_date + timedelta(days=days - 1)
-        else:
-            print("Unknown expiration date format:", expiration_date_str)
-            continue
 
-        print("Prediction expiration date:", expiration_date.strftime("%m/%d/%Y"), 
-            "vs today:", today.strftime("%m/%d/%Y"))
-        if today >= expiration_date:
-            supabase.table("ai_predictions").delete().eq("date", prediction.get("date")).execute()
-            processed_dates.add(prediction.get("date"))
-            print("Deleted prediction with expiration date", expiration_date.strftime("%m/%d/%Y"))
-        else:
-            print("Prediction with expiration date", expiration_date.strftime("%m/%d/%Y"), "is still valid.")
+            print("Prediction expiration date:", expiration_date_str, "vs today:", today.strftime("%m/%d/%Y"))
+            if today >= expiration_date:
+                supabase.table("ai_predictions").delete().eq("date", prediction.get("date")).execute()
+                processed_dates.add(prediction.get("date"))
+                expired_found = True
+                print("Deleted prediction with expiration date", expiration_date_str)
+            else:
+                print("Prediction with expiration date", expiration_date_str, "is still valid.")
+    
+    # If any prediction expired, clean the news table.
+    if expired_found:
+        clean_news_table()
+        # Do NOT auto-generate a new prediction; instead, wait for user trigger.
 
-
-# Initialize APScheduler to run the deletion job every minute
+# Initialize APScheduler to run the deletion job every minute.
 scheduler = BackgroundScheduler()
 scheduler.add_job(delete_expired_predictions, "interval", minutes=1)
 
@@ -229,11 +236,14 @@ async def receive_forex_data(payload: ForexPayload):
 
 @app.get("/api/get/deep_seek_data")
 async def get_prediction():
-    """Get AI prediction for today or create a new one if not already processed."""
+    """
+    Get AI prediction for today or create a new one if not already processed.
+    When triggered by the user, this function uses current-day news to generate a prediction.
+    """
     print("Processed dates:", processed_dates)
     today = date.today().isoformat()
 
-    # Check if prediction for today exists in Supabase
+    # Check if prediction for today exists in Supabase.
     pred_response = supabase.table("ai_predictions").select("*").eq("date", today).execute()
     if pred_response.data and len(pred_response.data) > 0:
         stored_pred = pred_response.data[0]
@@ -246,12 +256,12 @@ async def get_prediction():
         print("AI Prediction (from DB):", json_output)
         return {"data": json_output}
     else:
-        # Prevent repeated input if prediction was processed before
+        # Prevent repeated input if prediction was processed before.
         if today in processed_dates:
             print(f"Prediction for date {today} was already processed and deleted. Not inserting new data.")
             return {"data": f"Prediction for date {today} was already processed."}
 
-        # Build news display from main_temp_database
+        # Build news display from main_temp_database.
         news_display = "Current Market Inputs:\n\n"
         for item in main_temp_database:
             if item.get("type") == "forex":
@@ -260,7 +270,6 @@ async def get_prediction():
             elif item.get("type") == "twitter":
                 news_display += f"[MARKET UPDATE] 🚨 {item['content']}\n"
 
-        # Call the AI API for prediction
         try:
             response = client.chat.completions.create(
                 model="deepseek-chat",
@@ -291,25 +300,9 @@ Answer format:
 
         response_deep_seek = response.choices[0].message.content
         result = parse_trading_response(response_deep_seek)
-        print(f"parse {result}")
-        # At this point, result["duration"] is something like "2 Days"
-        try:
-            predicted_days = int(result["duration"].split()[0])
-        except Exception as e:
-            print("Error parsing predicted duration:", e)
-            predicted_days = 1  # default fallback
-
-        # Compute expiration date: subtract predicted_days from today so that
-        # the prediction is valid until that computed date.
-        computed_expiration_date = date.today() - timedelta(days=predicted_days)
-        # If computed expiration date equals today's date, mark as "expired"
-        if computed_expiration_date == date.today():
-            final_duration = "expired"
-        else:
-            final_duration = computed_expiration_date.strftime("%m/%d/%Y")
-
-        # Override the AI duration with the computed expiration date or "expired"
-        result["duration"] = final_duration
+        # Compute the final expiration date using the new logic.
+        final_expiration_date = compute_final_expiration_date(result["duration"])
+        result["duration"] = final_expiration_date
         result["date"] = today  # add today's date to the record
 
         json_output = json.dumps(result, indent=2)
@@ -321,19 +314,16 @@ Answer format:
             print("Error inserting prediction to Supabase:", e)
             raise HTTPException(status_code=500, detail="Error inserting prediction")
 
-        # Upsert each news item into Supabase 'news' table with today's date
+        # Upsert each news item into Supabase 'news' table with today's date.
         for item in main_temp_database:
             news_item = item.copy()
             news_item["date"] = today
             try:
-                # Removed on_conflict parameter since there's no unique constraint on the news table
                 supabase.table("news").upsert(news_item).execute()
             except Exception as e:
                 print("Error upserting news item to Supabase:", e)
 
         return {"data": json_output}
-
-
 
 @app.get("/api/get/data")
 async def get_main_temp_database():

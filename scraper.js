@@ -218,7 +218,7 @@ function startAutoRefreshWithScrape(page, pageName, scraperFunction, ...scraperA
   
   await twitterPage.waitForSelector('article', { timeout: 0 });
   
-  const keywords = ["dollar", "Federal Reserve", "interest rate", "monetary policy", "US economy", "S&P", "USD", "US"];
+  const keywords = ["dollar", "Federal Reserve", "interest rate", "monetary policy", "US economy", "S&P", "USD", "US", "TRUMP"];
   
   const initialForexNews = await forexFactoryScraper(forexPage);
   console.log('Initial Forex Factory News:', initialForexNews);
