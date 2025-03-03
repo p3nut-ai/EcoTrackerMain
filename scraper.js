@@ -198,7 +198,10 @@ function startAutoRefreshWithScrape(page, pageName, scraperFunction, ...scraperA
 // Main Function: Set Up Two Pages and Start Continuous Scraping
 // ------------------------------
 (async () => {
-  const browser = await puppeteer.launch({ headless: false });
+   const browser = await puppeteer.launch({
+    executablePath: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", // Adjust path if needed
+    headless: false,
+  });
   
   const forexPage = await browser.newPage();
   const twitterPage = await browser.newPage();
