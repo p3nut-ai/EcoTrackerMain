@@ -47,24 +47,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Pydantic models for Forex data
-class ForexItem(BaseModel):
-    title: str
-    time: str
-    isHighImpact: bool
-
-class ForexPayload(BaseModel):
-    data: List[ForexItem]
-
 # Global in-memory caches (for temporary use only)
 twitter_temp: List[str] = []      # Twitter data cache
-forex_temp: List[dict] = []         # Forex data cache
 main_temp_database: List[dict] = [] # Temporary news used for prediction
 processed_dates: set = set()       # Processed prediction dates
 
 # Global variable to hold the last known news count (if needed)
 global_news_count = 0
 new_prediction_flag = False
+
 def parse_time_value(time_str: str) -> float:
     """
     Parse a time string (e.g., "47 hr ago", "2 days ago", "30 min ago")
@@ -127,10 +118,7 @@ def generate_prediction_from_news(news_items: List[dict]) -> dict:
     """
     news_display = "Current Market Inputs:\n\n"
     for item in news_items:
-        if item.get("type") == "forex":
-            impact = "🔥 HIGH IMPACT" if item.get("content", {}).get("isHighImpact") else "⚠️ MEDIUM IMPACT"
-            news_display += f"[FOREX] {impact} - {item['content']['title']} ({item['content']['time']})\n"
-        elif item.get("type") == "twitter":
+        if item.get("type") == "twitter":
             news_display += f"[MARKET UPDATE] 🚨 {item['content']}\n"
     
     try:
@@ -202,10 +190,7 @@ def update_prediction_if_new_news() -> None:
     
     new_news_display = "New News:\n\n"
     for item in main_temp_database:
-        if item.get("type") == "forex":
-            impact = "🔥 HIGH IMPACT" if item.get("content", {}).get("isHighImpact") else "⚠️ MEDIUM IMPACT"
-            new_news_display += f"[FOREX] {impact} - {item['content']['title']} ({item['content']['time']})\n"
-        elif item.get("type") == "twitter":
+        if item.get("type") == "twitter":
             new_news_display += f"[MARKET UPDATE] 🚨 {item['content']}\n"
     
     pred_response = supabase.table("ai_predictions").select("*").eq("date", today).execute()
@@ -289,8 +274,10 @@ def delete_expired_predictions() -> None:
 
         if today > expiration_date:
             supabase.table("ai_predictions").delete().eq("date", prediction.get("date")).execute()
+            supabase.table("news").delete().eq("date", prediction.get("date")).execute()
             processed_dates.add(prediction.get("date"))
             print(colored("[!] Deleted prediction with expiration date " + expiration_date_str, "red", "on_red"))
+            clear_temp_news()
         else:
             print(colored("[+] Prediction with expiration date " + expiration_date_str + " is still valid.", "white", "on_green"))
 
@@ -315,8 +302,6 @@ async def receive_twitter_data(payload: List[str]):
     Receive Twitter data and insert it into the permanent "news" table if not already present.
     Duplicate checks are done by querying today's Twitter entries from the DB.
     """
-
-    # issue here: cannot accept new tweets and send it to the DB
     current_date = date.today().isoformat()
     existing_response = supabase.table("news").select("content").eq("type", "twitter").eq("date", current_date).execute()
     existing_tweets = set()
@@ -342,53 +327,16 @@ async def receive_twitter_data(payload: List[str]):
         insert_payload = [{"type": "twitter", "content": tweet, "date": current_date} for tweet in new_tweets]
         try:
             supabase.table("news").insert(insert_payload).execute()
+            print(colored("[+] New tweet added to database [+]", "black", "on_green"))
         except Exception as e:
             print(colored("Error inserting new Twitter data: " + str(e), "red", "on_red"))
 
     return {"message": "Twitter data received successfully", "count": len(new_tweets)}
 
-@app.post("/api/forex")
-async def receive_forex_data(payload: ForexPayload):
-    """
-    Receive Forex data and insert it into the permanent "news" table if not already present.
-    Duplicate checks are done by querying today's Forex entries (by title) from the DB.
-    """
-    current_date = date.today().isoformat()
-    existing_response = supabase.table("news").select("content").eq("type", "forex").eq("date", current_date).execute()
-    existing_titles = set()
-    if existing_response.data:
-        for item in existing_response.data:
-            content = item.get("content")
-            if content and isinstance(content, dict):
-                title = content.get("title")
-                if title:
-                    existing_titles.add(title.strip().lower())
-    new_forex = []
-    for item in payload.data:
-        if item.title.strip().lower() not in existing_titles:
-            existing_titles.add(item.title.strip().lower())
-            forex_temp.append(item.dict())
-            main_temp_database.append({"type": "forex", "content": item.dict()})
-            new_forex.append(item.dict())
-            print(colored("[+] New Forex data inserted. [+]", "white", "on_green"))
-        else:
-            print(colored("[-] Duplicate Forex data skipped: " + item.title, "red", "on_red"))
-    
-    if new_forex:
-        insert_payload = [{"type": "forex", "content": forex_item, "date": current_date} for forex_item in new_forex]
-        try:
-            supabase.table("news").insert(insert_payload).execute()
-        except Exception as e:
-            print(colored("Error inserting new Forex data: " + str(e), "red", "on_red"))
-    
-    return {"message": "Forex data received successfully", "count": len(new_forex)}
-
-
 def set_new_prediction_flag(flag: bool):
     global new_prediction_flag
     new_prediction_flag = flag
     print(colored(f"[+] New prediction flag set to {flag} [+]", "white", "on_green" if flag else "on_yellow"))
-
 
 @app.get("/api/new_prediction_status")
 async def new_prediction_status():
@@ -396,15 +344,9 @@ async def new_prediction_status():
     Trigger the prediction endpoint internally to check for new predictions.
     Then return the current new_prediction_flag along with the prediction data.
     """
-    # Call the get_prediction endpoint function internally.
     prediction_response = await get_prediction()
-    # Extract the prediction data.
     prediction_data = prediction_response.get("data", None)
-    # Return both the flag and the prediction.
     return {"new_prediction": new_prediction_flag, "prediction": prediction_data}
-
-
-
 
 @app.get("/api/get/deep_seek_data")
 async def get_prediction():
@@ -437,7 +379,6 @@ async def get_prediction():
         # Re-query prediction after possible deletion.
         pred_response = supabase.table("ai_predictions").select("*").eq("date", today).execute()
         
-        # If a prediction exists:
         if pred_response.data and len(pred_response.data) > 0:
             stored_pred = pred_response.data[0]
             if main_temp_database:
