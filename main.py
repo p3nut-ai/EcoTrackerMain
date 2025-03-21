@@ -424,3 +424,5 @@ async def get_main_temp_database():
     return {"data": news_items}
 
 # To run the API: uvicorn main:app --reload
+
+
