@@ -9,7 +9,6 @@ let tempDataBase = [];
 
 // TEMP DATABASE function
 function add_temp_database(data) {
-  // Reset the temporary database if data is falsy
   if (!data) {
     tempDataBase = [];
   }
@@ -19,7 +18,6 @@ function add_temp_database(data) {
     data.id = uuidv4();
   }
 
-  // Check for duplicates by comparing the "data" property (deep comparison)
   if (!tempDataBase.find(existing => JSON.stringify(existing.data) === JSON.stringify(data.data))) {
     tempDataBase.push(data);
     console.log('Item added:', data.id);
@@ -27,7 +25,6 @@ function add_temp_database(data) {
     let endpoint = '';
     let payloadToSend = null;
     
-    // Determine endpoint and payload based on the source (origin)
     if (data.origin === "X") { // Twitter source
       endpoint = 'http://127.0.0.1:8000/api/twitter';
       payloadToSend = data.data;
@@ -60,10 +57,9 @@ async function scrapeUserTweets(page, keywords) {
   await page.goto(searchUrl, { waitUntil: 'networkidle2' });
   await page.waitForSelector('article', { timeout: 30000 });
 
-  // Compute today's date in YYYY-MM-DD format
   const today = new Date();
   const currentDate = today.toISOString().split('T')[0];
-  // const currentDate = "2025-03-07";  // You can update this as needed
+  // const currentDate = "2025-03-07";  // You can update this as needed for debugging shit lang
 
   console.log("Current Date:", currentDate);
 
@@ -129,12 +125,10 @@ function startAutoRefreshWithScrape(page, pageName, scraperFunction, ...scraperA
   
   const twitterPage = await browser.newPage();
   
-  // Set a realistic user agent and viewport for the Twitter page
   const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36';
   await twitterPage.setUserAgent(userAgent);
   await twitterPage.setViewport({ width: 1280, height: 800 });
   
-  // Go to Twitter login page, wait for articles to load
   await twitterPage.goto('https://x.com/login', { waitUntil: 'networkidle2' });
   await twitterPage.waitForSelector('article', { timeout: 0 });
   
